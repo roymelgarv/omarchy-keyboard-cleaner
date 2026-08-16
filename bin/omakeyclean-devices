@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# List Hyprland input devices, classified into real keyboards vs. everything
+# else that merely emits key events.
+#
+# Hyprland's `.keyboards[]` is not a list of keyboards. It is a list of devices
+# with a keyboard capability, which on a typical desktop also sweeps in power
+# and sleep buttons, headset and microphone endpoints, laptop WMI hotkey stubs,
+# and the consumer-control interfaces of mice. Disabling all of them to clean
+# your keys is overkill; disabling only Hyprland's `main` one is wrong, because
+# `main` is frequently a hotkey stub you cannot type on.
+#
+# udev's input_id builtin already draws the line we want: it sets
+# ID_INPUT_KEYBOARD=1 only for devices carrying a full alphanumeric key range,
+# and ID_INPUT_KEY=1 for anything that emits key events at all. We join that
+# classification onto Hyprland's device list by name.
+#
+# The join is by name-slug, because Hyprland exposes no evdev node. Hyprland
+# lowercases the libinput name and replaces spaces with dashes, then appends
+# -1, -2, ... to disambiguate devices that would otherwise collide. So an exact
+# slug match is tried first and a suffix-stripped match second.
+#
+# Output: {"keyboards":[{name,label,class,main}],"pointers":[{name,label}]}
+# where class is "keyboard" (typeable) or "auxiliary" (key events only).
+
+set -euo pipefail
+
+for dep in hyprctl jq udevadm; do
+  command -v "$dep" >/dev/null || { echo "omakeyclean: missing dependency: $dep" >&2; exit 1; }
+done
+
+# slug -> {label, keyboard}. Slugs can repeat across event nodes (two "Power
+# Button" devices, a mouse and a keyboard sharing a product name), so the
+# keyboard flag is OR-ed across every node that shares a slug.
+udev_index() {
+  local node name kbd
+  for node in /sys/class/input/event*; do
+    [[ -r "$node/device/name" ]] || continue
+    name=$(<"$node/device/name")
+    kbd=false
+    if udevadm info -q property -n "/dev/input/${node##*/}" 2>/dev/null |
+      grep -qx 'ID_INPUT_KEYBOARD=1'; then
+      kbd=true
+    fi
+    jq -nc --arg label "$name" --argjson kbd "$kbd" \
+      '{slug: ($label | ascii_downcase | gsub(" "; "-")), label: $label, keyboard: $kbd}'
+  done | jq -sc '
+    group_by(.slug)
+    | map({
+        key: .[0].slug,
+        value: {label: .[0].label, keyboard: (map(.keyboard) | any)}
+      })
+    | from_entries'
+}
+
+hyprctl devices -j | jq -c --argjson udev "$(udev_index)" '
+  # Hyprland disambiguates duplicate names with a trailing -<n>; udev knows
+  # nothing about that suffix, so fall back to the bare name.
+  def stripSuffix: if test("-[0-9]+$") then sub("-[0-9]+$"; "") else . end;
+  def lookup($name): $udev[$name] // $udev[$name | stripSuffix] // null;
+
+  {
+    keyboards: [
+      .keyboards[]
+      | lookup(.name) as $u
+      | {
+          name:  .name,
+          label: ($u.label // .name),
+          # "virtual" is the compositor-side IME keyboard (fcitx5, wtype and
+          # friends). It has no physical keys to wipe, and disabling it breaks
+          # input-method text entry, so it is never a lock candidate.
+          class: (
+            if (.name | startswith("hl-virtual-keyboard")) then "virtual"
+            elif ($u.keyboard // false) then "keyboard"
+            else "auxiliary" end
+          ),
+          main:  .main
+        }
+    ],
+    pointers: [
+      .mice[]
+      | lookup(.name) as $u
+      | {name: .name, label: ($u.label // .name)}
+    ]
+  }'

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "omakeyclean",
+  "name": "Omakeyclean",
+  "version": "0.1.0",
+  "author": "Roy Melgar",
+  "license": "MIT",
+  "description": "Disable your keyboard for cleaning, unlock with the mouse",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Keyboard cleaning",
+    "description": "Lock selected input devices so you can wipe the keys, then hold the mouse to unlock",
+    "category": "Compositor",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
