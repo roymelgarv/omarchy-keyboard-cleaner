@@ -111,10 +111,22 @@ cmd_lock() {
   # Let go of the keyboard before we take it away.
   wait_for_key_release || true
 
-  local device
+  # Every device is attempted even after one fails, rather than letting `set -e`
+  # abort the loop. Aborting would leave the devices already disabled disabled,
+  # the rest untouched, and $STATE_FILE describing a set that does not match
+  # either -- and `unlock` restores from that file, so it has to stay true.
+  local device failed=0
   for device in "$@"; do
-    set_enabled "$device" false
+    if ! set_enabled "$device" false; then
+      echo "keyboard-cleaner: could not disable $device" >&2
+      failed=$((failed + 1))
+    fi
   done
+
+  if (( failed )); then
+    echo "keyboard-cleaner: $failed device(s) could not be disabled" >&2
+    return 1
+  fi
 }
 
 cmd_unlock() {
@@ -132,10 +144,26 @@ cmd_unlock() {
     mapfile -t devices < <(hyprctl devices -j | jq -r '.keyboards[].name, .mice[].name')
   fi
 
-  local device
+  # Never give up early here: this is the path that gives someone their keyboard
+  # back, every device re-enabled is a win, and enabling an already-enabled
+  # device is a no-op. Letting `set -e` abort would strand every device after
+  # the first failure.
+  local device failed=0
   for device in "${devices[@]}"; do
-    set_enabled "$device" true
+    if ! set_enabled "$device" true; then
+      echo "keyboard-cleaner: could not re-enable $device" >&2
+      failed=$((failed + 1))
+    fi
   done
+
+  # Only forget the session once everything is actually back. The state file is
+  # what `unlock` and the shell's startup recovery read to know what to restore;
+  # deleting it after a partial failure would discard the record of the devices
+  # still disabled.
+  if (( failed )); then
+    echo "keyboard-cleaner: $failed device(s) could not be re-enabled; keeping session state" >&2
+    return 1
+  fi
   rm -f "$STATE_FILE"
 
   # Locking parks idle handling, but that is done panel-side. Recovering from a
