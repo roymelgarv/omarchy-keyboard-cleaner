@@ -93,7 +93,7 @@ deliberate trade: the panic button is worth more than surviving a reload.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omakeyclean.git --enable
+omarchy plugin add https://github.com/roymelgarv/omarchy-keyboard-cleaner.git --enable
 ```
 
 Then place the widget:
