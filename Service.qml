@@ -210,17 +210,16 @@ Item {
   // overlay and IPC gone, so nothing would be left to say what happened or to
   // undo it.
   //
-  // Two constraints make this awkward, both confirmed by testing against a real
-  // `omarchy plugin remove` mid-lock:
+  // Two constraints shape this:
   //
-  //   1. It cannot call bin/keyboard-cleaner-lock. Removal moves the plugin
-  //      folder, and it wins that race -- the script is already gone by the time
-  //      the detached process would read it. So the recovery is inlined here,
-  //      using only hyprctl and jq, which live on PATH.
+  //   1. It cannot call bin/keyboard-cleaner-lock. `omarchy plugin remove`
+  //      moves the plugin folder before this fires, so the script is already
+  //      gone by the time a detached process would read it. The recovery is
+  //      inlined here instead, using only hyprctl and jq, which live on PATH.
   //   2. It cannot use `unlockProcess`. A Process owned by an object being
-  //      destroyed can go away before it ever runs. execDetached hands the work
-  //      to the system, which survives this object -- and does still fire during
-  //      teardown, verified with a marker file.
+  //      destroyed can go away before it ever runs. execDetached hands the
+  //      work to the system, which outlives this object and still runs during
+  //      teardown.
   //
   // Enabling an already-enabled device is a no-op, so re-enabling the armed set
   // is safe even if part of it was never disabled.
