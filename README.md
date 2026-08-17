@@ -1,9 +1,36 @@
-# omakeyclean
+# Keyboard Cleaner
 
 Disable your keyboard so you can wipe it down, and unlock it with the mouse.
 
 An Omarchy bar widget. Click the keyboard icon, pick which input devices to
 freeze, and hold the mouse on the unlock button when you're done.
+
+## Requirements
+
+Everything here ships with a standard Omarchy install; the plugin adds no
+dependencies of its own.
+
+| Needs | Used for |
+| --- | --- |
+| Hyprland (`hyprctl`) | Toggling each device's `enabled` flag, and reading held-key state via `hl.is_key_down` |
+| `jq` | Parsing `hyprctl -j` output and writing the runtime state file |
+| `udevadm` (systemd) | Telling real keyboards apart from other key-emitting devices |
+| `bash`, `awk` | The two bundled scripts in `bin/` |
+| `omarchy-shell idle` | Parking the idle timer for the duration of a session |
+
+### Privileges
+
+The plugin runs unsandboxed inside the Omarchy shell process, with your user's
+permissions — as every Omarchy plugin does. What it actually does with them is
+narrow:
+
+- It shells out to `hyprctl` to flip the `enabled` flag on the devices you armed,
+  and to `udevadm`/`hyprctl -j` to enumerate devices.
+- It writes exactly two files: your settings at
+  `~/.config/omarchy/keyboard-cleaner.json`, and session state under
+  `$XDG_RUNTIME_DIR/keyboard-cleaner/` (tmpfs, cleared on reboot).
+- **No root, no daemon, no evdev grab, no network access**, and no setuid helper.
+  The block is entirely compositor-side.
 
 ## Why per-device disable, and not a submap
 
@@ -30,14 +57,14 @@ root, no daemon, and no evdev grab.
 `hyprctl devices` does not list keyboards. It lists devices with a keyboard
 *capability*, which on a normal desktop also includes power and sleep buttons,
 microphone and headset endpoints, laptop WMI hotkey stubs, and the
-consumer-control interfaces of mice. On the author's machine that is 16
-entries, only 5 of which you can type on.
+consumer-control interfaces of mice. On a typical desktop that list runs to a
+dozen or more entries, only a handful of which you can actually type on.
 
 Worse, Hyprland's `main` keyboard is routinely one of the impostors — a WMI
 hotkey stub or the virtual IME keyboard — so "just disable the main one" is
 actively wrong.
 
-`bin/omakeyclean-devices` resolves this by joining Hyprland's device list
+`bin/keyboard-cleaner-devices` resolves this by joining Hyprland's device list
 against udev, which already draws the right line: `ID_INPUT_KEYBOARD=1` is set
 only for devices carrying a full alphanumeric key range, while `ID_INPUT_KEY=1`
 covers anything that merely emits key events.
@@ -50,7 +77,7 @@ suffix-stripped match second.
 Run it yourself:
 
 ```bash
-./bin/omakeyclean-devices | jq .
+./bin/keyboard-cleaner-devices | jq .
 ```
 
 Real keyboards are preselected. The classification is a strong hint, not
@@ -62,8 +89,7 @@ gospel, so the panel lets you arm anything — the impostors live behind the
 The only way out of a locked session is the mouse, so:
 
 - **Only keyboards are ever disabled.** Pointing devices are left alone by
-  construction, so the unlock button is always reachable. (Pointer locking is
-  deferred to a later iteration.)
+  construction, so the unlock button is always reachable.
 - **Auto-unlock** is on by default (2 minutes, configurable, can be turned off).
 - **Idle is parked** for the duration via `omarchy-shell idle disable`. A
   disabled keyboard stops feeding the idle timer, so without this a long wipe
@@ -81,7 +107,7 @@ In escalating order:
 1. Hold the unlock button on the overlay.
 2. Wait for auto-unlock.
 3. Click the bar icon — it unlocks immediately while a session is active.
-4. From another machine over SSH: `~/.config/omarchy/plugins/omakeyclean/bin/omakeyclean-lock unlock`
+4. From another machine over SSH: `~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner/bin/keyboard-cleaner-lock unlock`
 5. **Reload Hyprland's config.** `omarchy-restart-hyprctl`, a theme switch, or
    touching `~/.config/hypr/hyprland.lua` all clear `m_deviceConfigs`, and every
    device defaults back to enabled.
@@ -99,7 +125,7 @@ omarchy plugin add https://github.com/roymelgarv/omarchy-keyboard-cleaner.git --
 Then place the widget:
 
 ```bash
-omarchy bar move omakeyclean --section right
+omarchy bar move roymelgarv.omarchy-keyboard-cleaner --section right
 ```
 
 ## Optional keybinding
@@ -108,16 +134,16 @@ Omarchy plugins cannot ship keybindings — the installer never runs plugin code
 or writes Hyprland config. Add this to `~/.config/hypr/bindings.lua` yourself:
 
 ```lua
-o.bind("SUPER + SHIFT + K", "Clean keyboard", "omarchy-shell omakeyclean lock")
+o.bind("SUPER + SHIFT + K", "Clean keyboard", "omarchy-shell keyboard-cleaner lock")
 ```
 
 ## IPC
 
 ```bash
-omarchy-shell omakeyclean toggle    # open/close the panel
-omarchy-shell omakeyclean lock      # start a cleaning session
-omarchy-shell omakeyclean unlock    # end it
-omarchy-shell omakeyclean status    # JSON: locked, arming, devices, remaining
+omarchy-shell keyboard-cleaner toggle    # open/close the panel
+omarchy-shell keyboard-cleaner lock      # start a cleaning session
+omarchy-shell keyboard-cleaner unlock    # end it
+omarchy-shell keyboard-cleaner status    # JSON: locked, arming, devices, remaining
 ```
 
 ## Held keys
@@ -137,10 +163,10 @@ the Lua side writes its answer to a file under `$XDG_RUNTIME_DIR` that the
 script reads back. Inspect it live:
 
 ```bash
-while :; do ./bin/omakeyclean-lock keys-down; sleep 0.3; done
+while :; do ./bin/keyboard-cleaner-lock keys-down; sleep 0.3; done
 ```
 
-The wait is bounded by `OMAKEYCLEAN_KEY_TIMEOUT` (default 5s) so a physically
+The wait is bounded by `KEYBOARD_CLEANER_KEY_TIMEOUT` (default 5s) so a physically
 stuck key cannot make the plugin unusable. On timeout it locks anyway and warns,
 and the panel surfaces the warning.
 
@@ -155,13 +181,13 @@ Deploy your working copy (this is a real directory, not a symlink, so you
 need to re-copy after every edit):
 
 ```bash
-cp -r ./* ~/.config/omarchy/plugins/omakeyclean/
+cp -r ./* ~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner/
 ```
 
 Validate before reloading, to catch manifest/QML errors early:
 
 ```bash
-omarchy plugin validate ~/.config/omarchy/plugins/omakeyclean
+omarchy plugin validate ~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner
 ```
 
 Reload the shell to pick up changes:
@@ -176,19 +202,19 @@ omarchy-restart-shell
   QML errors and `IpcHandler` registration issues show up here.
 - **IPC, without touching the UI**:
   ```bash
-  omarchy-shell omakeyclean status   # JSON: locked, arming, devices, remaining
-  omarchy-shell omakeyclean lock
-  omarchy-shell omakeyclean unlock
-  omarchy-shell omakeyclean toggle
+  omarchy-shell keyboard-cleaner status   # JSON: locked, arming, devices, remaining
+  omarchy-shell keyboard-cleaner lock
+  omarchy-shell keyboard-cleaner unlock
+  omarchy-shell keyboard-cleaner toggle
   ```
 - **Device classification, standalone**:
   ```bash
-  ./bin/omakeyclean-devices | jq .
+  ./bin/keyboard-cleaner-devices | jq .
   ```
 - **Lock script, standalone** (bypasses QML entirely):
   ```bash
-  ./bin/omakeyclean-lock status
-  ./bin/omakeyclean-lock keys-down   # watch held-key detection live
+  ./bin/keyboard-cleaner-lock status
+  ./bin/keyboard-cleaner-lock keys-down   # watch held-key detection live
   ```
 - **Hyprland-side state**:
   ```bash
@@ -197,7 +223,7 @@ omarchy-restart-shell
   ```
 - **Crash-recovery path**: `kill -9` the running `quickshell` process while
   locked, then let it restart — `locked` state should restore from
-  `$XDG_RUNTIME_DIR/omakeyclean/locked.json` rather than being lost.
+  `$XDG_RUNTIME_DIR/keyboard-cleaner/locked.json` rather than being lost.
 
 ### If you lock yourself out while testing
 
@@ -215,7 +241,7 @@ not affect TTYs.
 - Hotplugging a keyboard mid-session leaves it enabled; it was not in the
   armed set.
 - Pointer locking (touchpad while wiping a laptop keyboard) is not implemented.
-  `bin/omakeyclean-devices` already reports pointers; the UI ignores them.
+  `bin/keyboard-cleaner-devices` already reports pointers; the UI ignores them.
 
 ## License
 

@@ -35,7 +35,7 @@ PanelWindow {
   visible: false
   anchors { top: true; bottom: true; left: true; right: true }
   color: "transparent"
-  WlrLayershell.namespace: "omakeyclean-lock"
+  WlrLayershell.namespace: "keyboard-cleaner-lock"
   WlrLayershell.layer: WlrLayer.Overlay
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
   exclusionMode: ExclusionMode.Ignore
@@ -159,7 +159,12 @@ PanelWindow {
       Text {
         width: parent.width
         visible: !root.arming && !!root.service && root.service.autoUnlockSeconds <= 0
-        text: "Stuck? Switch to a TTY with Ctrl+Alt+F2 and run omakeyclean-lock unlock"
+        // Full path on purpose: the script is bundled with the plugin and is
+        // never on PATH, so a bare command name would fail for the one user who
+        // most needs this to work as typed.
+        text: root.service
+          ? "Stuck? Switch to a TTY with Ctrl+Alt+F2 and run\n" + root.service.pluginDir + "/bin/keyboard-cleaner-lock unlock"
+          : ""
         color: Qt.darker(root.foreground, 1.55)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

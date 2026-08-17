@@ -8,13 +8,13 @@ import "Model.js" as Model
 // This is a `kind: "service"` plugin entry point: the shell instantiates it
 // exactly once, regardless of monitor count (shell.qml's ensureService()),
 // and every monitor's Panel.qml bar-widget instance reads this same object
-// via `bar.shell.firstPartyServiceFor("omakeyclean")`. That matters here
+// via `bar.shell.firstPartyServiceFor(<plugin id>)`. That matters here
 // specifically because `locked`/`arming` gate whether a hardware disable is
 // in effect -- if each monitor held its own copy, locking from one screen
 // would leave every other screen's bar icon, overlay, and unlock button
 // believing nothing was locked.
 //
-// Everything that touches Hyprland goes through bin/omakeyclean-lock rather
+// Everything that touches Hyprland goes through bin/keyboard-cleaner-lock rather
 // than inline hyprctl calls, so a stranded session can be recovered from a
 // terminal with the exact same code path the panel uses.
 //
@@ -29,7 +29,7 @@ Item {
   // file:// URL of the plugin folder, minus the scheme, so the bundled scripts
   // can be invoked wherever `omarchy plugin add` put us.
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
-  readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy/omakeyclean.json"
+  readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy/keyboard-cleaner.json"
 
   property var keyboards: []          // [{name, label, class, main}]
   property var keyboardSelection: []  // device names armed for locking
@@ -57,9 +57,8 @@ Item {
 
   // Bar-widget instances (one per monitor) register themselves here so IPC
   // open/close/toggle have a panel to act on. "Primary" is just whichever
-  // registered first -- an arbitrary but deterministic choice, the same kind
-  // of arbitrary-first-wins behavior Quickshell's own IpcHandler registration
-  // already had before this instance became a singleton.
+  // registered first -- an arbitrary but deterministic choice, matching the
+  // arbitrary-first-wins behavior of Quickshell's own IpcHandler registration.
   property var _panels: []
   readonly property var _primaryPanel: _panels.length > 0 ? _panels[0] : null
 
@@ -76,7 +75,7 @@ Item {
   }
 
   function refresh() {
-    devicesProcess.command = ["bash", pluginDir + "/bin/omakeyclean-devices"]
+    devicesProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-devices"]
     devicesProcess.running = true
   }
 
@@ -135,32 +134,32 @@ Item {
     }
     busy = true
     arming = true
-    lockProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "lock"].concat(devices)
+    lockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "lock"].concat(devices)
     lockProcess.running = true
   }
 
   function unlock() {
     if (!locked && !arming) return
     busy = true
-    unlockProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "unlock"]
+    unlockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "unlock"]
     unlockProcess.running = true
   }
 
-  // `locked` lives only in this QML object, so a shell process restart while
-  // locked -- a crash, a re-exec, anything short of the graceful hot-reload
-  // path -- used to reset it to false while the keyboard stayed genuinely
-  // disabled in Hyprland. The bar icon and overlay would then claim nothing
-  // was locked, silently breaking the "click any bar icon to unlock" escape
-  // hatch for a keyboard that was very much still dead.
+  // `locked` lives only in this QML object, but the hardware disable lives in
+  // Hyprland and outlives the shell process. Without restoring it, a shell
+  // restart while locked -- a crash, a re-exec, anything short of the graceful
+  // hot-reload path -- would leave the bar icon and overlay claiming nothing
+  // was locked for a keyboard that is still genuinely dead, breaking the
+  // "click any bar icon to unlock" escape hatch.
   //
-  // bin/omakeyclean-lock already tracks the real session in
-  // $XDG_RUNTIME_DIR/omakeyclean/locked.json (devices + lockedAt), written on
+  // bin/keyboard-cleaner-lock already tracks the real session in
+  // $XDG_RUNTIME_DIR/keyboard-cleaner/locked.json (devices + lockedAt), written on
   // lock and cleared on unlock, independent of this QML object's lifetime.
   // `status` reads it back. Runs once, after config load, so autoUnlockSeconds
   // reflects the persisted setting before it's used to judge whether the
   // countdown would already have elapsed.
   function restoreRuntimeState() {
-    stateProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "status"]
+    stateProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "status"]
     stateProcess.running = true
   }
 
@@ -339,11 +338,11 @@ Item {
 
   // Single IPC target for the whole plugin. Quickshell's IpcHandler
   // registration is winner-take-all per target string -- the first handler
-  // registered for "omakeyclean" would win ALL of its methods, silently
+  // registered for "keyboard-cleaner" would win ALL of its methods, silently
   // dropping every other instance's. Living here, on the one true singleton,
   // means there is only ever one handler to register in the first place.
   IpcHandler {
-    target: "omakeyclean"
+    target: "keyboard-cleaner"
     function open(): void { if (root._primaryPanel) root._primaryPanel.open() }
     function close(): void { if (root._primaryPanel) root._primaryPanel.close() }
     function show(): void { if (root._primaryPanel) root._primaryPanel.open() }

@@ -7,15 +7,20 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Bar widget + popout for omakeyclean. Layout follows the Omarchy panel
+// Bar widget + popout for Keyboard Cleaner. Layout follows the Omarchy panel
 // vocabulary used by the network and bluetooth panels: PanelHero at the top
 // with a trailing switch, a stat grid, then PanelSeparator/PanelSectionHeader
 // pairs introducing each list of rows.
 Panel {
   id: root
-  moduleName: "omakeyclean"
-  ipcTarget: "omakeyclean"
+  moduleName: "keyboard-cleaner"
+  ipcTarget: "keyboard-cleaner"
   manageIpc: false
+
+  // Must match manifest.json's `id`: the shell keys its singleton service
+  // registry by plugin id (shell.qml's ensureService), so a mismatch here
+  // resolves to null and silently leaves this widget without a service.
+  readonly property string pluginId: "roymelgarv.omarchy-keyboard-cleaner"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -49,17 +54,17 @@ Panel {
   // instance rather than owning one locally. The property stays named
   // `service` so every read below is unaffected; only its nullability
   // changes, since the singleton may not have finished loading yet.
-  readonly property var service: bar?.shell?.firstPartyServiceFor("omakeyclean") ?? null
+  readonly property var service: bar?.shell?.firstPartyServiceFor(root.pluginId) ?? null
 
   // Which physical monitor this bar-widget instance actually renders on.
   // `bar` carries no per-screen identity -- Bar.qml injects the SAME single
   // Bar instance into every monitor's copy of a widget, per its own
   // `target.bar = root` -- so it cannot be used to tell monitors apart.
-  // Vanilla Qt's `Window.window.screen` attached property doesn't track
-  // Quickshell's own per-screen PanelWindow layer surfaces either (measured
-  // empirically: it returned the same screen for both instances). Quickshell
-  // provides its own `QsWindow` attached property for exactly this, used the
-  // same way by the first-party Tray widget (bar/widgets/Tray.qml).
+  // Vanilla Qt's `Window.window.screen` attached property doesn't work either:
+  // it does not track Quickshell's own per-screen PanelWindow layer surfaces,
+  // and reports the same screen for every instance. Quickshell provides its own
+  // `QsWindow` attached property for exactly this, used the same way by the
+  // first-party Tray widget (bar/widgets/Tray.qml).
   readonly property var currentScreen: QsWindow.window ? QsWindow.window.screen : null
 
   // Lets the singleton's IpcHandler (which has no monitor of its own) target
@@ -72,9 +77,6 @@ Panel {
   // so a bare `service: service` here binds LockOverlay's property to
   // itself -- a QML property-shadowing footgun that silently produces an
   // always-null self-reference instead of forwarding Panel's real service.
-  // (This is how the overlay went untested and broken from the day it was
-  // written: `visible` never turned true because it read the same
-  // permanently-null shadowed name.)
   LockOverlay {
     visible: !!root.service && (root.service.locked || root.service.arming)
     service: root.service
