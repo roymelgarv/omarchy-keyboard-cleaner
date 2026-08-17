@@ -27,6 +27,12 @@ main            <- released, tagged versions only
     chore/...   <- docs, refactors, tooling, no behavior change
 ```
 
+`main` and `development` are both permanent, protected against deletion and
+force-push. Everything under them — `fix/…`, `feat/…`, `chore/…` — is
+expected to be short-lived and is deleted automatically on merge; that's the
+repo-wide "delete branch on merge" setting working as intended for *those*
+branches only.
+
 Open pull requests against `development`, not `main`. `main` only moves forward
 via a PR from `development` when a release is cut, and is branch-protected —
 direct pushes are rejected for everyone, maintainer included.
