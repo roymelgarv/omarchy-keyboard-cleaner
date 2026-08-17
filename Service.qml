@@ -226,18 +226,24 @@ Item {
   Component.onDestruction: {
     if (!locked && !arming) return
 
-    var script = ""
-    var devices = presentSelection()
-    for (var i = 0; i < devices.length; i++)
-      script += "hyprctl eval 'hl.device({ name = \"" + devices[i] + "\", enabled = true })' >/dev/null 2>&1; "
-    script += "rm -f " + stateFilePath + "; "
-    // Retried: during a plugin unload the shell's IPC is briefly unavailable,
-    // and a single attempt here loses the race and silently does nothing. Idle
-    // staying parked is not cosmetic -- stay-awake persists across reboots, so
-    // the machine would never lock or run the screensaver again.
-    script += "for i in 1 2 3 4 5; do omarchy-shell idle enable >/dev/null 2>&1 && break; sleep 1; done"
+    // Device names and paths are passed as positional arguments, never
+    // interpolated: a libinput name containing a quote or apostrophe would
+    // otherwise break the shell quoting and silently discard this entire
+    // script -- including the idle restore below, which must not be lost.
+    // The Lua string uses a long bracket ([==[ ]==]) so it needs no escaping
+    // either.
+    var script =
+      'state=$1; shift; ' +
+      'for d in "$@"; do hyprctl eval "hl.device({ name = [==[$d]==], enabled = true })" >/dev/null 2>&1; done; ' +
+      'rm -f "$state"; ' +
+      // Retried: during a plugin unload the shell's IPC is briefly unavailable,
+      // and a single attempt here loses the race and silently does nothing. Idle
+      // staying parked is not cosmetic -- stay-awake persists across reboots, so
+      // the machine would never lock or run the screensaver again.
+      'for i in 1 2 3 4 5; do omarchy-shell idle enable >/dev/null 2>&1 && break; sleep 1; done'
 
-    Quickshell.execDetached(["bash", "-c", script])
+    Quickshell.execDetached(
+      ["bash", "-c", script, "keyboard-cleaner-teardown", stateFilePath].concat(presentSelection()))
   }
 
   property Process devicesProcess: Process {
@@ -270,8 +276,11 @@ Item {
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text).indexOf("still held") !== -1)
+        var out = String(text)
+        if (out.indexOf("still held") !== -1)
           root.lastError = "A key was still held — it may read as stuck until you press it again."
+        else if (out.indexOf("probe failed") !== -1)
+          root.lastError = "Could not check for held keys — if a key reads as stuck, press it again."
       }
     }
     onExited: function (exitCode) {

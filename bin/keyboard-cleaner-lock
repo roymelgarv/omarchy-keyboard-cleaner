@@ -35,7 +35,9 @@ STATE_FILE="$STATE_DIR/locked.json"
 PROBE_FILE="$STATE_DIR/keyprobe"
 KEY_TIMEOUT="${KEYBOARD_CLEANER_KEY_TIMEOUT:-5}"
 
-command -v hyprctl >/dev/null || { echo "keyboard-cleaner: hyprctl not found" >&2; exit 1; }
+for dep in hyprctl jq; do
+  command -v "$dep" >/dev/null || { echo "keyboard-cleaner: missing dependency: $dep" >&2; exit 1; }
+done
 
 # Which physical keys are held right now, as evdev keycodes, comma separated.
 #
@@ -51,8 +53,8 @@ command -v hyprctl >/dev/null || { echo "keyboard-cleaner: hyprctl not found" >&
 # stranded; synthetic events do not appear here.
 held_keys() {
   mkdir -p "$STATE_DIR"
-  : >"$PROBE_FILE"
-  hyprctl eval "local d={} for kc=1,255 do if hl.is_key_down(kc) then d[#d+1]=kc end end local f=io.open('$PROBE_FILE','w') if f then f:write(table.concat(d,',')) f:close() end" \
+  rm -f "$PROBE_FILE"
+  hyprctl eval "local d={} for kc=1,255 do if hl.is_key_down(kc) then d[#d+1]=kc end end local f=io.open([==[$PROBE_FILE]==],'w') if f then f:write('ok:'..table.concat(d,',')) f:close() end" \
     >/dev/null 2>&1 || true
   cat "$PROBE_FILE" 2>/dev/null || true
 }
@@ -64,13 +66,26 @@ wait_for_key_release() {
   # Counted rather than clock-based: bash's SECONDS ticks on wall-clock
   # boundaries, so a "2 second" deadline can elapse in barely over one.
   local -r poll=0.1 attempts=$(awk -v t="$KEY_TIMEOUT" 'BEGIN { printf "%d", (t / 0.1) + 1 }')
-  local held i
+  local raw held="" i probe_ok=0
   for ((i = 0; i < attempts; i++)); do
-    held=$(held_keys)
-    [[ -n "$held" ]] || return 0
+    raw=$(held_keys)
+    if [[ $raw == ok:* ]]; then
+      probe_ok=1
+      held=${raw#ok:}
+      [[ -n "$held" ]] || return 0
+    else
+      # Probe did not run. Unknown is treated as "might be held" rather than
+      # "all clear" -- guessing wrong here latches a key in the focused client
+      # with no way to release it.
+      probe_ok=0
+    fi
     sleep "$poll"
   done
-  echo "keyboard-cleaner: keys $held still held after ${KEY_TIMEOUT}s; locking anyway" >&2
+  if (( probe_ok )); then
+    echo "keyboard-cleaner: keys $held still held after ${KEY_TIMEOUT}s; locking anyway" >&2
+  else
+    echo "keyboard-cleaner: held-key probe failed; locking anyway after ${KEY_TIMEOUT}s" >&2
+  fi
   return 1
 }
 
@@ -79,7 +94,7 @@ set_enabled() {
   # Omarchy runs Hyprland's Lua config, where `hyprctl keyword device[...]` is
   # the legacy hyprlang syntax and does nothing. `hyprctl eval` is how
   # omarchy-toggle-input-device drives the same knob.
-  hyprctl eval "hl.device({ name = \"$device\", enabled = $value })" >/dev/null
+  hyprctl eval "hl.device({ name = [==[$device]==], enabled = $value })" >/dev/null
 }
 
 cmd_lock() {
@@ -144,6 +159,14 @@ case "${1:-}" in
   lock)      shift; cmd_lock "$@" ;;
   unlock)    cmd_unlock ;;
   status)    cmd_status ;;
-  keys-down) held_keys; echo ;;
+  keys-down)
+    raw=$(held_keys)
+    if [[ $raw == ok:* ]]; then
+      echo "${raw#ok:}"
+    else
+      echo "keyboard-cleaner: held-key probe failed" >&2
+      exit 1
+    fi
+    ;;
   *) echo "usage: keyboard-cleaner-lock {lock <device>...|unlock|status|keys-down}" >&2; exit 2 ;;
 esac
