@@ -1,9 +1,63 @@
-# Keyboard Cleaner
+<h1 align="center">Keyboard Cleaner</h1>
 
-Disable your keyboard so you can wipe it down, and unlock it with the mouse.
+<p align="center">Disable your keyboard so you can wipe it down, and unlock it with the mouse.</p>
+
+<p align="center">
+  <img src="preview.png" alt="The Keyboard Cleaner panel, listing detected keyboards with arm switches and an auto-unlock selector" width="440">
+</p>
 
 An Omarchy bar widget. Click the keyboard icon, pick which input devices to
 freeze, and hold the mouse on the unlock button when you're done.
+
+The block is Hyprland's per-device `enabled` flag, so a locked keyboard delivers
+nothing at all — no keys, no modifiers, no keybinds, no IME. Only keyboards are
+ever disabled, so the mouse is always there to get you out.
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/roymelgarv/omarchy-keyboard-cleaner.git --enable
+```
+
+Then place the widget:
+
+```bash
+omarchy bar move roymelgarv.omarchy-keyboard-cleaner --section right
+```
+
+## Usage
+
+Click the keyboard icon in the bar to open the panel, arm the devices you want
+frozen, and flip the switch. An overlay takes over the screen; hold the unlock
+button with the mouse to end the session, or wait for auto-unlock. Clicking the
+bar icon while locked also unlocks immediately.
+
+Real keyboards are armed for you on first run. Everything else Hyprland reports
+as a keyboard — power buttons, headset controls, laptop hotkey stubs — sits
+behind the **other key-emitting devices** reveal, because udev says they carry
+no typeable key range.
+
+From the shell:
+
+```bash
+omarchy-shell keyboard-cleaner toggle    # open/close the panel
+omarchy-shell keyboard-cleaner lock      # start a cleaning session
+omarchy-shell keyboard-cleaner unlock    # end it
+omarchy-shell keyboard-cleaner status    # JSON: locked, arming, devices, remaining
+```
+
+Omarchy plugins cannot ship keybindings — the installer never runs plugin code
+or writes Hyprland config. Add one yourself in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + SHIFT + K", "Clean keyboard", "omarchy-shell keyboard-cleaner lock")
+```
+
+Locking waits for every physical key to come up before disabling anything — a
+key held at the moment its device goes dead never delivers its release, and
+would read as stuck afterwards. The overlay shows **Release all keys** during
+that window. From the bar button it's imperceptible; from a keybinding it lasts
+as long as you keep holding SUPER+SHIFT.
 
 ## Requirements
 
@@ -18,71 +72,14 @@ dependencies of its own.
 | `bash`, `awk` | The two bundled scripts in `bin/` |
 | `omarchy-shell idle` | Parking the idle timer for the duration of a session |
 
-### Privileges
-
-The plugin runs unsandboxed inside the Omarchy shell process, with your user's
-permissions — as every Omarchy plugin does. What it actually does with them is
-narrow:
-
-- It shells out to `hyprctl` to flip the `enabled` flag on the devices you armed,
-  and to `udevadm`/`hyprctl -j` to enumerate devices.
-- It writes exactly two files: your settings at
-  `~/.config/omarchy/keyboard-cleaner.json`, and session state under
-  `$XDG_RUNTIME_DIR/keyboard-cleaner/` (tmpfs, cleared on reboot).
-- **No root, no daemon, no evdev grab, no network access**, and no setuid helper.
-  The block is entirely compositor-side.
-
-## Why per-device disable, and not a submap
-
-The obvious Hyprland approach is a submap with a `catchall` bind. It does not
-work. In `KeybindManager.cpp`, binds are filtered by modmask *before* the
-catchall branch is reached, so any key pressed with a modifier held — `Ctrl+C`,
-`Alt+Tab`, `Super+Q` — passes straight through to the focused window. Modifiers
-themselves never reach the keybind manager at all; `onKeyboardMod()` delivers
-them to clients independently. A submap lock leaks.
-
-This plugin uses Hyprland's per-device `enabled` flag instead:
-
-```bash
-hyprctl eval 'hl.device({ name = "razer-razer-huntsman-v2", enabled = false })'
-```
-
-`CInputManager::onKeyboardKey` and `onKeyboardMod` both return early on
-`!m_enabled`, so a disabled keyboard delivers nothing — no keys, no modifiers,
-no keybinds, no IME, and it does not even reset the idle timer. It needs no
-root, no daemon, and no evdev grab.
-
-## What counts as a keyboard
-
-`hyprctl devices` does not list keyboards. It lists devices with a keyboard
-*capability*, which on a normal desktop also includes power and sleep buttons,
-microphone and headset endpoints, laptop WMI hotkey stubs, and the
-consumer-control interfaces of mice. On a typical desktop that list runs to a
-dozen or more entries, only a handful of which you can actually type on.
-
-Worse, Hyprland's `main` keyboard is routinely one of the impostors — a WMI
-hotkey stub or the virtual IME keyboard — so "just disable the main one" is
-actively wrong.
-
-`bin/keyboard-cleaner-devices` resolves this by joining Hyprland's device list
-against udev, which already draws the right line: `ID_INPUT_KEYBOARD=1` is set
-only for devices carrying a full alphanumeric key range, while `ID_INPUT_KEY=1`
-covers anything that merely emits key events.
-
-The join is by name-slug, because Hyprland exposes no evdev node — it lowercases
-the libinput name, replaces spaces with dashes, and appends `-1`, `-2` to
-disambiguate collisions. The script tries an exact match first and a
-suffix-stripped match second.
-
-Run it yourself:
-
-```bash
-./bin/keyboard-cleaner-devices | jq .
-```
-
-Real keyboards are preselected. The classification is a strong hint, not
-gospel, so the panel lets you arm anything — the impostors live behind the
-"other key-emitting devices" reveal.
+The plugin runs unsandboxed inside the Omarchy shell process with your user's
+permissions, as every Omarchy plugin does. What it does with them is narrow: it
+shells out to `hyprctl` to flip the `enabled` flag on the devices you armed and
+to `udevadm`/`hyprctl -j` to enumerate them, and it writes exactly two files —
+your settings at `~/.config/omarchy/keyboard-cleaner.json`, and session state
+under `$XDG_RUNTIME_DIR/keyboard-cleaner/` (tmpfs, cleared on reboot). **No
+root, no daemon, no evdev grab, no network access**, and no setuid helper. The
+block is entirely compositor-side.
 
 ## Safety
 
@@ -107,7 +104,8 @@ In escalating order:
 1. Hold the unlock button on the overlay.
 2. Wait for auto-unlock.
 3. Click the bar icon — it unlocks immediately while a session is active.
-4. From another machine over SSH: `~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner/bin/keyboard-cleaner-lock unlock`
+4. From another machine over SSH:
+   `~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner/bin/keyboard-cleaner-lock unlock`
 5. **Reload Hyprland's config.** `omarchy-restart-hyprctl`, a theme switch, or
    touching `~/.config/hypr/hyprland.lua` all clear `m_deviceConfigs`, and every
    device defaults back to enabled.
@@ -116,19 +114,7 @@ In escalating order:
 Because of (5), a theme switch mid-wipe will silently unlock you. That is a
 deliberate trade: the panic button is worth more than surviving a reload.
 
-## Install
-
-```bash
-omarchy plugin add https://github.com/roymelgarv/omarchy-keyboard-cleaner.git --enable
-```
-
-Then place the widget:
-
-```bash
-omarchy bar move roymelgarv.omarchy-keyboard-cleaner --section right
-```
-
-## Removal
+## Remove
 
 ```bash
 omarchy plugin remove roymelgarv.omarchy-keyboard-cleaner
@@ -144,114 +130,6 @@ behind, so reinstalling restores your armed devices and auto-unlock preference.
 Delete that file too for a clean slate. Session state lives in
 `$XDG_RUNTIME_DIR/keyboard-cleaner/` and disappears on reboot regardless.
 
-## Optional keybinding
-
-Omarchy plugins cannot ship keybindings — the installer never runs plugin code
-or writes Hyprland config. Add this to `~/.config/hypr/bindings.lua` yourself:
-
-```lua
-o.bind("SUPER + SHIFT + K", "Clean keyboard", "omarchy-shell keyboard-cleaner lock")
-```
-
-## IPC
-
-```bash
-omarchy-shell keyboard-cleaner toggle    # open/close the panel
-omarchy-shell keyboard-cleaner lock      # start a cleaning session
-omarchy-shell keyboard-cleaner unlock    # end it
-omarchy-shell keyboard-cleaner status    # JSON: locked, arming, devices, remaining
-```
-
-## Held keys
-
-A key held at the moment its device is disabled never delivers its release:
-`onKeyboardKey` returns early on `!m_enabled`, so the focused client keeps that
-key latched forever. The keybinding trigger hits this every time — SUPER and
-SHIFT are both physically down at the instant the bind fires.
-
-So locking waits for every physical key to come up before disabling anything.
-The overlay shows "Release all keys" during that window. From the bar button it
-is imperceptible; from a keybinding it lasts as long as you keep holding.
-
-State comes from `hl.is_key_down`, which reflects Hyprland's physical `m_pressed`
-tracking. `hyprctl eval` only ever prints "ok" and never the chunk's value, so
-the Lua side writes its answer to a file under `$XDG_RUNTIME_DIR` that the
-script reads back. Inspect it live:
-
-```bash
-while :; do ./bin/keyboard-cleaner-lock keys-down; sleep 0.3; done
-```
-
-The wait is bounded by `KEYBOARD_CLEANER_KEY_TIMEOUT` (default 5s) so a physically
-stuck key cannot make the plugin unusable. On timeout it locks anyway and warns,
-and the panel surfaces the warning.
-
-## Local development
-
-This is not a standalone app — it's QML that runs inside Quickshell, which
-runs inside Hyprland/Omarchy. There is no build step or binary to launch;
-you deploy the plugin into Omarchy's plugin directory and it loads as part
-of the live shell.
-
-Deploy your working copy (this is a real directory, not a symlink, so you
-need to re-copy after every edit):
-
-```bash
-cp -r ./* ~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner/
-```
-
-Validate before reloading, to catch manifest/QML errors early:
-
-```bash
-omarchy plugin validate ~/.config/omarchy/plugins/roymelgarv.omarchy-keyboard-cleaner
-```
-
-Reload the shell to pick up changes:
-
-```bash
-omarchy-restart-shell
-```
-
-### Debugging
-
-- **Live logs**: `journalctl --user -f` while you interact with the widget —
-  QML errors and `IpcHandler` registration issues show up here.
-- **IPC, without touching the UI**:
-  ```bash
-  omarchy-shell keyboard-cleaner status   # JSON: locked, arming, devices, remaining
-  omarchy-shell keyboard-cleaner lock
-  omarchy-shell keyboard-cleaner unlock
-  omarchy-shell keyboard-cleaner toggle
-  ```
-- **Device classification, standalone**:
-  ```bash
-  ./bin/keyboard-cleaner-devices | jq .
-  ```
-- **Lock script, standalone** (bypasses QML entirely):
-  ```bash
-  ./bin/keyboard-cleaner-lock status
-  ./bin/keyboard-cleaner-lock keys-down   # watch held-key detection live
-  ```
-- **Hyprland-side state**:
-  ```bash
-  hyprctl devices -j | jq '.keyboards[] | {name, enabled}'
-  hyprctl layers   # confirm the lock overlay surface is present when locked
-  ```
-- **Crash-recovery path**: `kill -9` the running `quickshell` process while
-  locked, then let it restart — `locked` state should restore from
-  `$XDG_RUNTIME_DIR/keyboard-cleaner/locked.json` rather than being lost.
-
-### If you lock yourself out while testing
-
-Reloading Hyprland's config resets every device to enabled:
-
-```bash
-omarchy-restart-hyprctl
-```
-
-Or drop to a TTY with `Ctrl+Alt+F2` — the block is compositor-side and does
-not affect TTYs.
-
 ## Known gaps
 
 - Hotplugging a keyboard mid-session leaves it enabled; it was not in the
@@ -262,7 +140,9 @@ not affect TTYs.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — PRs target `development`, not `main`.
+It also covers how the device classification and held-key handling work, and how
+to run the plugin from a working copy.
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -21,6 +21,6 @@ labels: bug
 This matters most for anything touching lock/unlock, since it can leave a
 keyboard unusable. Please include:
 
-- `omarchy-shell <ipc-target> status` output at the time
+- `omarchy-shell keyboard-cleaner status` output at the time
 - Relevant lines from `journalctl --user -b 0`
 - Whether `omarchy-restart-hyprctl` or a TTY got you unstuck
