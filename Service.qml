@@ -146,54 +146,6 @@ Item {
     unlockProcess.running = true
   }
 
-  // `locked` lives only in this QML object, so a shell process restart while
-  // locked -- a crash, a re-exec, anything short of the graceful hot-reload
-  // path -- used to reset it to false while the keyboard stayed genuinely
-  // disabled in Hyprland. The bar icon and overlay would then claim nothing
-  // was locked, silently breaking the "click any bar icon to unlock" escape
-  // hatch for a keyboard that was very much still dead.
-  //
-  // bin/omakeyclean-lock already tracks the real session in
-  // $XDG_RUNTIME_DIR/omakeyclean/locked.json (devices + lockedAt), written on
-  // lock and cleared on unlock, independent of this QML object's lifetime.
-  // `status` reads it back. Runs once, after config load, so autoUnlockSeconds
-  // reflects the persisted setting before it's used to judge whether the
-  // countdown would already have elapsed.
-  function restoreRuntimeState() {
-    stateProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "status"]
-    stateProcess.running = true
-  }
-
-  function applyRuntimeState(json) {
-    var parsed
-    try {
-      parsed = JSON.parse(json)
-    } catch (e) {
-      return
-    }
-    var devices = parsed.devices || []
-    if (devices.length === 0) return // nothing was locked when the shell went away
-
-    var lockedAt = Number(parsed.lockedAt) || 0
-    var elapsed = lockedAt > 0 ? (Date.now() / 1000 - lockedAt) : 0
-
-    if (autoUnlockSeconds > 0 && elapsed >= autoUnlockSeconds) {
-      // The auto-unlock window already passed while nothing was watching it.
-      // Finish the job: re-enable the devices, clear the runtime state file,
-      // restore idle. unlock() requires locked||arming to act, so this is the
-      // one place that sets locked before calling it -- correctly, since the
-      // hardware really was locked a moment ago.
-      locked = true
-      unlock()
-      return
-    }
-
-    locked = true
-    remainingSeconds = autoUnlockSeconds > 0 ? Math.max(0, Math.round(autoUnlockSeconds - elapsed)) : 0
-    setIdleEnabled(false)
-    if (autoUnlockSeconds > 0) countdown.start()
-  }
-
   // A disabled keyboard stops feeding Hyprland's idle timer, so a two-minute
   // wipe would otherwise trip the idle lock and drop the user at a password
   // prompt they cannot type into. Park idle handling for the session.
@@ -211,15 +163,6 @@ Item {
     onExited: function (exitCode) {
       if (exitCode !== 0)
         root.lastError = "Device detection failed (exit " + exitCode + ")."
-    }
-  }
-
-  property Process stateProcess: Process {
-    running: false
-    command: []
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyRuntimeState(text)
     }
   }
 
@@ -299,22 +242,21 @@ Item {
       root.showAuxiliary = stored.showAuxiliary === true
       root.configLoaded = true
       root.applyStoredAgainstDevices()
-      root.checkRuntimeStateOnce()
     }
 
     onLoadFailed: {
       root.hasStoredSelection = false
       root.configLoaded = true
       root.applyStoredAgainstDevices()
-      root.checkRuntimeStateOnce()
     }
   }
 
   // First run only: arm exactly the devices udev calls real keyboards.
   //
-  // Deliberately does NOT prune names that are missing from the current
-  // device list. A probe that comes back short -- during shell startup, or
-  // while Hyprland is re-enumerating -- would otherwise permanently delete a
+  // Deliberately does NOT prune names that are missing from the current device
+  // list. One bar-widget instance exists per monitor, each with its own device
+  // probe, and a probe that comes back short -- during shell startup, or while
+  // Hyprland is re-enumerating -- would otherwise permanently delete a
   // keyboard from the armed set. Absent devices simply do not render, and
   // lock() filters them out at the point of use.
   function applyStoredAgainstDevices() {
@@ -323,14 +265,6 @@ Item {
     keyboardSelection = Model.defaultKeyboardSelection(keyboards)
     hasStoredSelection = true
     save()
-  }
-
-  property bool runtimeStateChecked: false
-
-  function checkRuntimeStateOnce() {
-    if (runtimeStateChecked) return
-    runtimeStateChecked = true
-    restoreRuntimeState()
   }
 
   onKeyboardsChanged: applyStoredAgainstDevices()
