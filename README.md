@@ -259,6 +259,10 @@ not affect TTYs.
 - Pointer locking (touchpad while wiping a laptop keyboard) is not implemented.
   `bin/keyboard-cleaner-devices` already reports pointers; the UI ignores them.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — PRs target `development`, not `main`.
+
 ## License
 
 MIT
