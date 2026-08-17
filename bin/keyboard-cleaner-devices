@@ -25,7 +25,7 @@
 set -euo pipefail
 
 for dep in hyprctl jq udevadm; do
-  command -v "$dep" >/dev/null || { echo "omakeyclean: missing dependency: $dep" >&2; exit 1; }
+  command -v "$dep" >/dev/null || { echo "keyboard-cleaner: missing dependency: $dep" >&2; exit 1; }
 done
 
 # slug -> {label, keyboard}. Slugs can repeat across event nodes (two "Power

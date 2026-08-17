@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Disable / re-enable Hyprland input devices for a keyboard-cleaning session.
 #
-#   omakeyclean-lock lock <device> [<device>...]
-#   omakeyclean-lock unlock
-#   omakeyclean-lock status
-#   omakeyclean-lock keys-down
+#   keyboard-cleaner-lock lock <device> [<device>...]
+#   keyboard-cleaner-lock unlock
+#   keyboard-cleaner-lock status
+#   keyboard-cleaner-lock keys-down
 #
 # Mechanism. Hyprland's per-device `enabled` flag is checked at the very top of
 # CInputManager::onKeyboardKey and onKeyboardMod, so a disabled keyboard
@@ -16,7 +16,7 @@
 # Recovery, by design and in order of escalation:
 #   1. The unlock button in the overlay.
 #   2. The session's auto-expiry timer.
-#   3. `omakeyclean-lock unlock` over SSH.
+#   3. `keyboard-cleaner-lock unlock` over SSH.
 #   4. Any Hyprland config reload -- `omarchy-restart-hyprctl`, a theme switch,
 #      or touching ~/.config/hypr/hyprland.lua. Reload clears m_deviceConfigs
 #      and every device defaults back to enabled.
@@ -30,12 +30,12 @@
 
 set -euo pipefail
 
-STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omakeyclean"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/keyboard-cleaner"
 STATE_FILE="$STATE_DIR/locked.json"
 PROBE_FILE="$STATE_DIR/keyprobe"
-KEY_TIMEOUT="${OMAKEYCLEAN_KEY_TIMEOUT:-5}"
+KEY_TIMEOUT="${KEYBOARD_CLEANER_KEY_TIMEOUT:-5}"
 
-command -v hyprctl >/dev/null || { echo "omakeyclean: hyprctl not found" >&2; exit 1; }
+command -v hyprctl >/dev/null || { echo "keyboard-cleaner: hyprctl not found" >&2; exit 1; }
 
 # Which physical keys are held right now, as evdev keycodes, comma separated.
 #
@@ -70,7 +70,7 @@ wait_for_key_release() {
     [[ -n "$held" ]] || return 0
     sleep "$poll"
   done
-  echo "omakeyclean: keys $held still held after ${KEY_TIMEOUT}s; locking anyway" >&2
+  echo "keyboard-cleaner: keys $held still held after ${KEY_TIMEOUT}s; locking anyway" >&2
   return 1
 }
 
@@ -83,7 +83,7 @@ set_enabled() {
 }
 
 cmd_lock() {
-  [[ $# -gt 0 ]] || { echo "omakeyclean: lock needs at least one device" >&2; exit 2; }
+  [[ $# -gt 0 ]] || { echo "keyboard-cleaner: lock needs at least one device" >&2; exit 2; }
 
   # Record the intent before touching a single device. If this process is
   # killed midway, `unlock` still knows the full set to restore.
@@ -108,7 +108,9 @@ cmd_unlock() {
   # Hyprland currently reports, which is safe: enabling an already-enabled
   # device is a no-op.
   local devices=()
+  local had_session=0
   if [[ -r "$STATE_FILE" ]]; then
+    had_session=1
     mapfile -t devices < <(jq -r '.devices[]' "$STATE_FILE" 2>/dev/null || true)
   fi
   if [[ ${#devices[@]} -eq 0 ]]; then
@@ -120,6 +122,18 @@ cmd_unlock() {
     set_enabled "$device" true
   done
   rm -f "$STATE_FILE"
+
+  # Locking parks idle handling, but that is done panel-side. Recovering from a
+  # TTY or over SSH bypasses the panel entirely, so without this the keyboard
+  # comes back while idle stays parked -- and stay-awake persists across
+  # reboots, meaning the machine would never lock or run the screensaver again.
+  #
+  # Guarded on there having actually been a session: a bare `unlock` on a
+  # machine that was not locked must not clear a stay-awake the user set
+  # deliberately.
+  if (( had_session )) && command -v omarchy-shell >/dev/null; then
+    omarchy-shell idle enable >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_status() {
@@ -131,5 +145,5 @@ case "${1:-}" in
   unlock)    cmd_unlock ;;
   status)    cmd_status ;;
   keys-down) held_keys; echo ;;
-  *) echo "usage: omakeyclean-lock {lock <device>...|unlock|status|keys-down}" >&2; exit 2 ;;
+  *) echo "usage: keyboard-cleaner-lock {lock <device>...|unlock|status|keys-down}" >&2; exit 2 ;;
 esac
