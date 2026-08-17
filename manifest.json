@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "omakeyclean",
-  "name": "Omakeyclean",
+  "id": "roymelgarv.omarchy-keyboard-cleaner",
+  "name": "Keyboard Cleaner",
   "version": "0.1.0",
   "author": "Roy Melgar",
   "license": "MIT",
@@ -16,7 +16,7 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Keyboard cleaning",
+    "displayName": "Keyboard cleaner",
     "description": "Lock selected input devices so you can wipe the keys, then hold the mouse to unlock",
     "category": "Compositor",
     "allowMultiple": false,

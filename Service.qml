@@ -8,13 +8,13 @@ import "Model.js" as Model
 // This is a `kind: "service"` plugin entry point: the shell instantiates it
 // exactly once, regardless of monitor count (shell.qml's ensureService()),
 // and every monitor's Panel.qml bar-widget instance reads this same object
-// via `bar.shell.firstPartyServiceFor("omakeyclean")`. That matters here
+// via `bar.shell.firstPartyServiceFor(<plugin id>)`. That matters here
 // specifically because `locked`/`arming` gate whether a hardware disable is
 // in effect -- if each monitor held its own copy, locking from one screen
 // would leave every other screen's bar icon, overlay, and unlock button
 // believing nothing was locked.
 //
-// Everything that touches Hyprland goes through bin/omakeyclean-lock rather
+// Everything that touches Hyprland goes through bin/keyboard-cleaner-lock rather
 // than inline hyprctl calls, so a stranded session can be recovered from a
 // terminal with the exact same code path the panel uses.
 //
@@ -29,7 +29,11 @@ Item {
   // file:// URL of the plugin folder, minus the scheme, so the bundled scripts
   // can be invoked wherever `omarchy plugin add` put us.
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
-  readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy/omakeyclean.json"
+  readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy/keyboard-cleaner.json"
+  // Mirrors STATE_DIR/STATE_FILE in bin/keyboard-cleaner-lock. Duplicated on
+  // purpose: teardown has to clear this file without the script, which removal
+  // may already have deleted. Keep the two in step.
+  readonly property string stateFilePath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/keyboard-cleaner/locked.json"
 
   property var keyboards: []          // [{name, label, class, main}]
   property var keyboardSelection: []  // device names armed for locking
@@ -57,9 +61,8 @@ Item {
 
   // Bar-widget instances (one per monitor) register themselves here so IPC
   // open/close/toggle have a panel to act on. "Primary" is just whichever
-  // registered first -- an arbitrary but deterministic choice, the same kind
-  // of arbitrary-first-wins behavior Quickshell's own IpcHandler registration
-  // already had before this instance became a singleton.
+  // registered first -- an arbitrary but deterministic choice, matching the
+  // arbitrary-first-wins behavior of Quickshell's own IpcHandler registration.
   property var _panels: []
   readonly property var _primaryPanel: _panels.length > 0 ? _panels[0] : null
 
@@ -76,7 +79,7 @@ Item {
   }
 
   function refresh() {
-    devicesProcess.command = ["bash", pluginDir + "/bin/omakeyclean-devices"]
+    devicesProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-devices"]
     devicesProcess.running = true
   }
 
@@ -135,15 +138,63 @@ Item {
     }
     busy = true
     arming = true
-    lockProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "lock"].concat(devices)
+    lockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "lock"].concat(devices)
     lockProcess.running = true
   }
 
   function unlock() {
     if (!locked && !arming) return
     busy = true
-    unlockProcess.command = ["bash", pluginDir + "/bin/omakeyclean-lock", "unlock"]
+    unlockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "unlock"]
     unlockProcess.running = true
+  }
+
+  // `locked` lives only in this QML object, but the hardware disable lives in
+  // Hyprland and outlives the shell process. Without restoring it, a shell
+  // restart while locked -- a crash, a re-exec, anything short of the graceful
+  // hot-reload path -- would leave the bar icon and overlay claiming nothing
+  // was locked for a keyboard that is still genuinely dead, breaking the
+  // "click any bar icon to unlock" escape hatch.
+  //
+  // bin/keyboard-cleaner-lock already tracks the real session in
+  // $XDG_RUNTIME_DIR/keyboard-cleaner/locked.json (devices + lockedAt), written on
+  // lock and cleared on unlock, independent of this QML object's lifetime.
+  // `status` reads it back. Runs once, after config load, so autoUnlockSeconds
+  // reflects the persisted setting before it's used to judge whether the
+  // countdown would already have elapsed.
+  function restoreRuntimeState() {
+    stateProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "status"]
+    stateProcess.running = true
+  }
+
+  function applyRuntimeState(json) {
+    var parsed
+    try {
+      parsed = JSON.parse(json)
+    } catch (e) {
+      return
+    }
+    var devices = parsed.devices || []
+    if (devices.length === 0) return // nothing was locked when the shell went away
+
+    var lockedAt = Number(parsed.lockedAt) || 0
+    var elapsed = lockedAt > 0 ? (Date.now() / 1000 - lockedAt) : 0
+
+    if (autoUnlockSeconds > 0 && elapsed >= autoUnlockSeconds) {
+      // The auto-unlock window already passed while nothing was watching it.
+      // Finish the job: re-enable the devices, clear the runtime state file,
+      // restore idle. unlock() requires locked||arming to act, so this is the
+      // one place that sets locked before calling it -- correctly, since the
+      // hardware really was locked a moment ago.
+      locked = true
+      unlock()
+      return
+    }
+
+    locked = true
+    remainingSeconds = autoUnlockSeconds > 0 ? Math.max(0, Math.round(autoUnlockSeconds - elapsed)) : 0
+    setIdleEnabled(false)
+    if (autoUnlockSeconds > 0) countdown.start()
   }
 
   // A disabled keyboard stops feeding Hyprland's idle timer, so a two-minute
@@ -151,6 +202,48 @@ Item {
   // prompt they cannot type into. Park idle handling for the session.
   function setIdleEnabled(enabled) {
     Quickshell.execDetached(["omarchy-shell", "idle", enabled ? "enable" : "disable"])
+  }
+
+  // Being torn down mid-session must not strand a disabled keyboard. This runs
+  // when the plugin is disabled or removed, both of which destroy the service
+  // while the hardware disable is still in effect in Hyprland -- with the
+  // overlay and IPC gone, so nothing would be left to say what happened or to
+  // undo it.
+  //
+  // Two constraints shape this:
+  //
+  //   1. It cannot call bin/keyboard-cleaner-lock. `omarchy plugin remove`
+  //      moves the plugin folder before this fires, so the script is already
+  //      gone by the time a detached process would read it. The recovery is
+  //      inlined here instead, using only hyprctl and jq, which live on PATH.
+  //   2. It cannot use `unlockProcess`. A Process owned by an object being
+  //      destroyed can go away before it ever runs. execDetached hands the
+  //      work to the system, which outlives this object and still runs during
+  //      teardown.
+  //
+  // Enabling an already-enabled device is a no-op, so re-enabling the armed set
+  // is safe even if part of it was never disabled.
+  Component.onDestruction: {
+    if (!locked && !arming) return
+
+    // Device names and paths are passed as positional arguments, never
+    // interpolated: a libinput name containing a quote or apostrophe would
+    // otherwise break the shell quoting and silently discard this entire
+    // script -- including the idle restore below, which must not be lost.
+    // The Lua string uses a long bracket ([==[ ]==]) so it needs no escaping
+    // either.
+    var script =
+      'state=$1; shift; ' +
+      'for d in "$@"; do hyprctl eval "hl.device({ name = [==[$d]==], enabled = true })" >/dev/null 2>&1; done; ' +
+      'rm -f "$state"; ' +
+      // Retried: during a plugin unload the shell's IPC is briefly unavailable,
+      // and a single attempt here loses the race and silently does nothing. Idle
+      // staying parked is not cosmetic -- stay-awake persists across reboots, so
+      // the machine would never lock or run the screensaver again.
+      'for i in 1 2 3 4 5; do omarchy-shell idle enable >/dev/null 2>&1 && break; sleep 1; done'
+
+    Quickshell.execDetached(
+      ["bash", "-c", script, "keyboard-cleaner-teardown", stateFilePath].concat(presentSelection()))
   }
 
   property Process devicesProcess: Process {
@@ -166,6 +259,15 @@ Item {
     }
   }
 
+  property Process stateProcess: Process {
+    running: false
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyRuntimeState(text)
+    }
+  }
+
   property Process lockProcess: Process {
     running: false
     command: []
@@ -174,8 +276,11 @@ Item {
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        if (String(text).indexOf("still held") !== -1)
+        var out = String(text)
+        if (out.indexOf("still held") !== -1)
           root.lastError = "A key was still held — it may read as stuck until you press it again."
+        else if (out.indexOf("probe failed") !== -1)
+          root.lastError = "Could not check for held keys — if a key reads as stuck, press it again."
       }
     }
     onExited: function (exitCode) {
@@ -242,21 +347,22 @@ Item {
       root.showAuxiliary = stored.showAuxiliary === true
       root.configLoaded = true
       root.applyStoredAgainstDevices()
+      root.checkRuntimeStateOnce()
     }
 
     onLoadFailed: {
       root.hasStoredSelection = false
       root.configLoaded = true
       root.applyStoredAgainstDevices()
+      root.checkRuntimeStateOnce()
     }
   }
 
   // First run only: arm exactly the devices udev calls real keyboards.
   //
-  // Deliberately does NOT prune names that are missing from the current device
-  // list. One bar-widget instance exists per monitor, each with its own device
-  // probe, and a probe that comes back short -- during shell startup, or while
-  // Hyprland is re-enumerating -- would otherwise permanently delete a
+  // Deliberately does NOT prune names that are missing from the current
+  // device list. A probe that comes back short -- during shell startup, or
+  // while Hyprland is re-enumerating -- would otherwise permanently delete a
   // keyboard from the armed set. Absent devices simply do not render, and
   // lock() filters them out at the point of use.
   function applyStoredAgainstDevices() {
@@ -267,17 +373,25 @@ Item {
     save()
   }
 
+  property bool runtimeStateChecked: false
+
+  function checkRuntimeStateOnce() {
+    if (runtimeStateChecked) return
+    runtimeStateChecked = true
+    restoreRuntimeState()
+  }
+
   onKeyboardsChanged: applyStoredAgainstDevices()
 
   Component.onCompleted: refresh()
 
   // Single IPC target for the whole plugin. Quickshell's IpcHandler
   // registration is winner-take-all per target string -- the first handler
-  // registered for "omakeyclean" would win ALL of its methods, silently
+  // registered for "keyboard-cleaner" would win ALL of its methods, silently
   // dropping every other instance's. Living here, on the one true singleton,
   // means there is only ever one handler to register in the first place.
   IpcHandler {
-    target: "omakeyclean"
+    target: "keyboard-cleaner"
     function open(): void { if (root._primaryPanel) root._primaryPanel.open() }
     function close(): void { if (root._primaryPanel) root._primaryPanel.close() }
     function show(): void { if (root._primaryPanel) root._primaryPanel.open() }

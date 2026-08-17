@@ -1,6 +1,6 @@
 .pragma library
 
-// Pure helpers for the omakeyclean panel. No QML types in here so the logic
+// Pure helpers for the Keyboard Cleaner panel. No QML types in here so the logic
 // stays readable and testable on its own.
 
 // libinput names routinely repeat the vendor ("Razer Razer Huntsman V2",
