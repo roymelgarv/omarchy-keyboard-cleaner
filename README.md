@@ -128,6 +128,22 @@ Then place the widget:
 omarchy bar move roymelgarv.omarchy-keyboard-cleaner --section right
 ```
 
+## Removal
+
+```bash
+omarchy plugin remove roymelgarv.omarchy-keyboard-cleaner
+```
+
+Disabling or removing the plugin during a cleaning session ends that session
+first — the service re-enables your keyboards and restores idle handling on its
+way out. That matters because removal deletes the plugin folder, and with it the
+`bin/keyboard-cleaner-lock` script this README points you at for recovery.
+
+Your settings at `~/.config/omarchy/keyboard-cleaner.json` are deliberately left
+behind, so reinstalling restores your armed devices and auto-unlock preference.
+Delete that file too for a clean slate. Session state lives in
+`$XDG_RUNTIME_DIR/keyboard-cleaner/` and disappears on reboot regardless.
+
 ## Optional keybinding
 
 Omarchy plugins cannot ship keybindings — the installer never runs plugin code

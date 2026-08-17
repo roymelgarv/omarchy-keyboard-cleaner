@@ -108,7 +108,9 @@ cmd_unlock() {
   # Hyprland currently reports, which is safe: enabling an already-enabled
   # device is a no-op.
   local devices=()
+  local had_session=0
   if [[ -r "$STATE_FILE" ]]; then
+    had_session=1
     mapfile -t devices < <(jq -r '.devices[]' "$STATE_FILE" 2>/dev/null || true)
   fi
   if [[ ${#devices[@]} -eq 0 ]]; then
@@ -120,6 +122,18 @@ cmd_unlock() {
     set_enabled "$device" true
   done
   rm -f "$STATE_FILE"
+
+  # Locking parks idle handling, but that is done panel-side. Recovering from a
+  # TTY or over SSH bypasses the panel entirely, so without this the keyboard
+  # comes back while idle stays parked -- and stay-awake persists across
+  # reboots, meaning the machine would never lock or run the screensaver again.
+  #
+  # Guarded on there having actually been a session: a bare `unlock` on a
+  # machine that was not locked must not clear a stay-awake the user set
+  # deliberately.
+  if (( had_session )) && command -v omarchy-shell >/dev/null; then
+    omarchy-shell idle enable >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_status() {

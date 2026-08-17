@@ -30,6 +30,10 @@ Item {
   // can be invoked wherever `omarchy plugin add` put us.
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy/keyboard-cleaner.json"
+  // Mirrors STATE_DIR/STATE_FILE in bin/keyboard-cleaner-lock. Duplicated on
+  // purpose: teardown has to clear this file without the script, which removal
+  // may already have deleted. Keep the two in step.
+  readonly property string stateFilePath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/keyboard-cleaner/locked.json"
 
   property var keyboards: []          // [{name, label, class, main}]
   property var keyboardSelection: []  // device names armed for locking
@@ -198,6 +202,43 @@ Item {
   // prompt they cannot type into. Park idle handling for the session.
   function setIdleEnabled(enabled) {
     Quickshell.execDetached(["omarchy-shell", "idle", enabled ? "enable" : "disable"])
+  }
+
+  // Being torn down mid-session must not strand a disabled keyboard. This runs
+  // when the plugin is disabled or removed, both of which destroy the service
+  // while the hardware disable is still in effect in Hyprland -- with the
+  // overlay and IPC gone, so nothing would be left to say what happened or to
+  // undo it.
+  //
+  // Two constraints make this awkward, both confirmed by testing against a real
+  // `omarchy plugin remove` mid-lock:
+  //
+  //   1. It cannot call bin/keyboard-cleaner-lock. Removal moves the plugin
+  //      folder, and it wins that race -- the script is already gone by the time
+  //      the detached process would read it. So the recovery is inlined here,
+  //      using only hyprctl and jq, which live on PATH.
+  //   2. It cannot use `unlockProcess`. A Process owned by an object being
+  //      destroyed can go away before it ever runs. execDetached hands the work
+  //      to the system, which survives this object -- and does still fire during
+  //      teardown, verified with a marker file.
+  //
+  // Enabling an already-enabled device is a no-op, so re-enabling the armed set
+  // is safe even if part of it was never disabled.
+  Component.onDestruction: {
+    if (!locked && !arming) return
+
+    var script = ""
+    var devices = presentSelection()
+    for (var i = 0; i < devices.length; i++)
+      script += "hyprctl eval 'hl.device({ name = \"" + devices[i] + "\", enabled = true })' >/dev/null 2>&1; "
+    script += "rm -f " + stateFilePath + "; "
+    // Retried: during a plugin unload the shell's IPC is briefly unavailable,
+    // and a single attempt here loses the race and silently does nothing. Idle
+    // staying parked is not cosmetic -- stay-awake persists across reboots, so
+    // the machine would never lock or run the screensaver again.
+    script += "for i in 1 2 3 4 5; do omarchy-shell idle enable >/dev/null 2>&1 && break; sleep 1; done"
+
+    Quickshell.execDetached(["bash", "-c", script])
   }
 
   property Process devicesProcess: Process {
