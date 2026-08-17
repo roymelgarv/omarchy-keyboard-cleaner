@@ -151,6 +151,10 @@ and the panel surfaces the warning.
 - Pointer locking (touchpad while wiping a laptop keyboard) is not implemented.
   `bin/omakeyclean-devices` already reports pointers; the UI ignores them.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — PRs target `development`, not `main`.
+
 ## License
 
 MIT
