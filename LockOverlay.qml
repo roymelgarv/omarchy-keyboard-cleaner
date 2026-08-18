@@ -85,7 +85,7 @@ PanelWindow {
             return ""
           if (root.arming)
             return "Waiting for every key to come up — a key held now would read as stuck afterwards."
-          return Model.countLabel(root.service.armedCount, "keyboard") + " disabled — safe to wipe"
+          return Model.countLabel(root.service.lockedCount, "keyboard") + " disabled — safe to wipe"
         }
         color: Qt.darker(root.foreground, 1.4)
         font.family: root.fontFamily
@@ -146,9 +146,29 @@ PanelWindow {
         }
       }
 
+      // Errors have to be legible from here. The panel's error line
+      // (Panel.qml) lives inside the popout, which is shut during a session --
+      // so on the one failure that matters, a partial re-enable that leaves
+      // keyboards dead, this overlay is the only surface the user is looking at.
       Text {
         width: parent.width
-        visible: !root.arming && !!root.service && root.service.autoUnlockSeconds > 0
+        visible: !root.arming && !!root.service && root.service.lastError !== ""
+        text: root.service ? root.service.lastError : ""
+        color: Color.urgent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.WordWrap
+      }
+
+      Text {
+        width: parent.width
+        // Suppressed once something has gone wrong: if unlocking failed, the
+        // countdown either already fired or is about to fail the same way, and
+        // promising an automatic recovery that is not coming is worse than
+        // saying nothing.
+        visible: !root.arming && !!root.service
+          && root.service.autoUnlockSeconds > 0 && root.service.lastError === ""
         text: root.service ? "Unlocks automatically in " + Model.formatCountdown(root.service.remainingSeconds) : ""
         color: Qt.darker(root.foreground, 1.55)
         font.family: root.fontFamily
@@ -158,7 +178,11 @@ PanelWindow {
 
       Text {
         width: parent.width
-        visible: !root.arming && !!root.service && root.service.autoUnlockSeconds <= 0
+        // Shown whenever auto-unlock cannot be relied on: either it is switched
+        // off, or an error means the in-GUI paths may not work at all. This is
+        // the last escape hatch, so it must be on screen exactly then.
+        visible: !root.arming && !!root.service
+          && (root.service.autoUnlockSeconds <= 0 || root.service.lastError !== "")
         // Full path on purpose: the script is bundled with the plugin and is
         // never on PATH, so a bare command name would fail for the one user who
         // most needs this to work as typed.
