@@ -57,7 +57,12 @@ Item {
   readonly property var auxiliaryDevices: keyboards.filter(function (d) { return d.class !== "keyboard" })
   readonly property string armBlocker: Model.armBlocker(keyboardSelection)
   readonly property bool canArm: armBlocker === "" && !busy
-  readonly property int armedCount: keyboardSelection.length
+  // Counts what a lock actually acts on, not what is remembered. The armed set
+  // keeps names of keyboards that are currently unplugged (see presentSelection),
+  // and the overlay renders this number as "N keyboards disabled -- safe to
+  // wipe": counting the absent ones there overstates the block on the very line
+  // that tells someone it is safe to put a wet cloth on their keyboard.
+  readonly property int lockedCount: presentSelection().length
 
   // Bar-widget instances (one per monitor) register themselves here so IPC
   // open/close/toggle have a panel to act on. "Primary" is just whichever
@@ -136,6 +141,10 @@ Item {
       lastError = "None of the armed keyboards are connected."
       return
     }
+    // Cleared per attempt: the overlay now keys its countdown and its TTY
+    // recovery hint off this, so a stale message from a previous session would
+    // misreport the state of this one.
+    lastError = ""
     busy = true
     arming = true
     lockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "lock"].concat(devices)
@@ -144,6 +153,9 @@ Item {
 
   function unlock() {
     if (!locked && !arming) return
+    // Same reason as lock(): a retry must not inherit the failure message from
+    // the attempt before it, or a successful retry still reads as broken.
+    lastError = ""
     busy = true
     unlockProcess.command = ["bash", pluginDir + "/bin/keyboard-cleaner-lock", "unlock"]
     unlockProcess.running = true
@@ -283,13 +295,20 @@ Item {
           root.lastError = "Could not check for held keys — if a key reads as stuck, press it again."
       }
     }
+    // A failure here is treated as locked, not as "nothing happened". The script
+    // disables devices one at a time, so it can fail having already disabled
+    // some of them -- and `locked` is what keeps the overlay, its
+    // hold-to-unlock button, its TTY recovery text, and the bar icon's unlock
+    // action on screen. Reporting "unlocked" over a keyboard that is really
+    // dead removes every in-GUI way out at the moment it is needed most.
+    // The reverse mistake is cheap: re-enabling an already-enabled device is a
+    // no-op, so a session that did not need ending costs one click, and
+    // auto-unlock ends it unattended anyway.
     onExited: function (exitCode) {
       root.busy = false
       root.arming = false
-      if (exitCode !== 0) {
-        root.lastError = "Could not disable the selected devices."
-        return
-      }
+      if (exitCode !== 0)
+        root.lastError = "Some keyboards may still be disabled — unlock to restore them."
       root.locked = true
       root.remainingSeconds = root.autoUnlockSeconds
       root.setIdleEnabled(false)
@@ -301,15 +320,23 @@ Item {
   property Process unlockProcess: Process {
     running: false
     command: []
+    // The session only ends when every device is actually back. A partial
+    // re-enable keeps `locked` true on purpose: the overlay and its recovery
+    // text stay up, the bar icon still unlocks, and holding the button retries.
+    // Idle stays parked with it -- a disabled keyboard does not feed the idle
+    // timer, so releasing it here would let the machine idle-lock onto a
+    // keyboard that still cannot type a password.
     onExited: function (exitCode) {
       root.busy = false
       root.arming = false
+      if (exitCode !== 0) {
+        root.lastError = "Some keyboards could not be re-enabled — hold to retry, or run omarchy-restart-hyprctl."
+        return
+      }
       root.countdown.stop()
       root.locked = false
       root.remainingSeconds = 0
       root.setIdleEnabled(true)
-      if (exitCode !== 0)
-        root.lastError = "Re-enable reported an error — run omarchy-restart-hyprctl."
     }
   }
 
