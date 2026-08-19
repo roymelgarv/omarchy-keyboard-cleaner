@@ -88,9 +88,38 @@ omarchy-restart-shell             # full reload
   ./bin/keyboard-cleaner-lock status
   while :; do ./bin/keyboard-cleaner-lock keys-down; sleep 0.3; done
   ```
-- **Hyprland-side state**:
+  **Never hand a real device name to `lock` by hand.** `hl.device()` no-ops
+  silently on a name it does not recognise and still returns `ok`, so
+  `lock <real-keyboard> <invented-name>` exits 0 having genuinely disabled the
+  real one — mixing in a fake name to keep the command "safe" buys nothing.
+  Exercise failure paths with names that are *all* invented, and finish every
+  session with a plain `./bin/keyboard-cleaner-lock unlock` — no shims, no
+  environment overrides.
+
+  Two ways to strand a device while testing, both easy to hit:
+
+  - `rm`-ing `$XDG_RUNTIME_DIR/keyboard-cleaner/locked.json` throws away the
+    only record of what is disabled. A later `unlock` restores whatever the
+    *newest* state file names, and anything disabled before you deleted it
+    stays disabled with nothing pointing at it.
+  - Overriding `XDG_RUNTIME_DIR` to isolate state also moves Hyprland's socket
+    out from under `hyprctl`, so every `eval` fails. The run looks like a
+    device-level failure and is really a lost socket.
+
+  If you do strand one, the recovery is the same as for any lockout below —
+  or just lock and unlock once through the panel, which re-enables the whole
+  armed set.
+- **Hyprland-side state**: you cannot read a device's `enabled` flag back.
+  `hyprctl devices -j` carries an `enabled` key, but it is `null` for every
+  device even mid-session; `hl.get_config('device:<name>:enabled')` returns nil
+  while resolving ordinary options fine; and
+  `hyprctl getoption 'device[<name>]:enabled'` answers "no such option"
+  (all checked on Hyprland 0.56.2). `hl.device()` is a setter with no getter
+  beside it. So the state file is the only record of what is disabled, and
+  "I checked Hyprland and the keyboard is fine" is not a claim this codebase
+  can support — end tests with `unlock`, not with an inspection.
   ```bash
-  hyprctl devices -j | jq '.keyboards[] | {name, enabled}'
+  ./bin/keyboard-cleaner-lock status   # the only honest answer
   hyprctl layers   # confirm the lock overlay surface is present when locked
   ```
 - **Crash recovery**: `kill -9` the running `quickshell` process while locked,
