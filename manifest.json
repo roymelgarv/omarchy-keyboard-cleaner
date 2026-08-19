@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "roymelgarv.omarchy-keyboard-cleaner",
   "name": "Keyboard Cleaner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Roy Melgar",
   "license": "MIT",
   "description": "Disable your keyboard for cleaning, unlock with the mouse",
